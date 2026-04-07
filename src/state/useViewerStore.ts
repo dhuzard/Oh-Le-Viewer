@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { applySearchFilter, createDefaultVisualState, ensureNodeState } from '../lib/layout';
+import { applySearchFilter, collectSubclassDescendants, createDefaultVisualState, ensureEdgeState, ensureNodeState, normalizeVisualState } from '../lib/layout';
 import { parseOntology, parseOntologyBundle } from '../lib/ontologyParser';
 import { loadPersistedState, savePersistedState } from '../lib/persistence';
 import { sampleImportedOntology, sampleOntology } from '../data/sampleOntology';
@@ -17,10 +17,15 @@ interface ViewerState {
   setViewMode: (viewMode: ViewMode) => void;
   setSearchQuery: (searchQuery: string) => void;
   updateNodeState: (classId: string, patch: Partial<VisualNodeState>) => void;
+  updateEdgeState: (edgeId: string, patch: Partial<PersistedViewerState['edgeStates'][string]>) => void;
   setViewport: (viewport: ViewportState) => void;
   setLayoutSettings: (patch: Partial<PersistedViewerState['layoutSettings']>) => void;
   upsertGroup: (group: VisualGroup) => void;
   assignGroupToSelected: (groupId: string | null) => void;
+  hideClass: (classId: string) => void;
+  restoreClass: (classId: string) => void;
+  hideBranch: (classId: string) => void;
+  restoreAllHiddenClasses: () => void;
   importLayout: (state: PersistedViewerState) => void;
   replaceVisualState: (updater: (current: PersistedViewerState) => PersistedViewerState) => void;
 }
@@ -28,7 +33,7 @@ interface ViewerState {
 async function hydrateOntology(source: string, sourceName: string): Promise<{ ontology: OntologyDocument; visualState: PersistedViewerState }> {
   const ontology = await parseOntology(source, sourceName);
   const persisted = loadPersistedState(ontology.fingerprint);
-  const visualState = persisted || createDefaultVisualState(ontology.fingerprint);
+  const visualState = normalizeVisualState(persisted || createDefaultVisualState(ontology.fingerprint), ontology.fingerprint);
   return { ontology, visualState: applySearchFilter(ontology, visualState) };
 }
 
@@ -36,7 +41,7 @@ async function hydrateOntologyFiles(files: File[]): Promise<{ ontology: Ontology
   const sources = await Promise.all(files.map(async (file) => ({ source: await file.text(), sourceName: file.name })));
   const ontology = await parseOntologyBundle(sources);
   const persisted = loadPersistedState(ontology.fingerprint);
-  const visualState = persisted || createDefaultVisualState(ontology.fingerprint);
+  const visualState = normalizeVisualState(persisted || createDefaultVisualState(ontology.fingerprint), ontology.fingerprint);
   return { ontology, visualState: applySearchFilter(ontology, visualState) };
 }
 
@@ -58,7 +63,7 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
       { source: sampleImportedOntology, sourceName: 'shared-core.ttl' },
     ]);
     const persisted = loadPersistedState(ontology.fingerprint);
-    const visualState = persisted || createDefaultVisualState(ontology.fingerprint);
+    const visualState = normalizeVisualState(persisted || createDefaultVisualState(ontology.fingerprint), ontology.fingerprint);
     const next = { ontology, visualState: applySearchFilter(ontology, visualState) };
     set({ ontology: next.ontology, visualState: next.visualState, loading: false });
     persistIfReady(get());
@@ -120,6 +125,27 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     });
     persistIfReady(get());
   },
+  updateEdgeState: (edgeId, patch) => {
+    set((state) => {
+      if (!state.visualState) {
+        return state;
+      }
+      const current = ensureEdgeState(state.visualState, edgeId);
+      return {
+        visualState: {
+          ...state.visualState,
+          edgeStates: {
+            ...state.visualState.edgeStates,
+            [edgeId]: {
+              ...current,
+              ...patch,
+            },
+          },
+        },
+      };
+    });
+    persistIfReady(get());
+  },
   setViewport: (viewport) => {
     set((state) => {
       if (!state.visualState) {
@@ -170,12 +196,78 @@ export const useViewerStore = create<ViewerState>((set, get) => ({
     }
     get().updateNodeState(selectedClassId, { groupId });
   },
+  hideClass: (classId) => {
+    set((state) => {
+      if (!state.visualState) {
+        return state;
+      }
+      const hiddenClassIds = state.visualState.hiddenClassIds.includes(classId)
+        ? state.visualState.hiddenClassIds
+        : [...state.visualState.hiddenClassIds, classId];
+      return {
+        visualState: {
+          ...state.visualState,
+          hiddenClassIds,
+          selectedClassId: state.visualState.selectedClassId === classId ? null : state.visualState.selectedClassId,
+        },
+      };
+    });
+    persistIfReady(get());
+  },
+  restoreClass: (classId) => {
+    set((state) => {
+      if (!state.visualState) {
+        return state;
+      }
+      return {
+        visualState: {
+          ...state.visualState,
+          hiddenClassIds: state.visualState.hiddenClassIds.filter((entry) => entry !== classId),
+        },
+      };
+    });
+    persistIfReady(get());
+  },
+  hideBranch: (classId) => {
+    set((state) => {
+      if (!state.visualState || !state.ontology) {
+        return state;
+      }
+      const descendantIds = collectSubclassDescendants(state.ontology, classId);
+      const hiddenClassIds = new Set(state.visualState.hiddenClassIds);
+      for (const descendantId of descendantIds) {
+        hiddenClassIds.add(descendantId);
+      }
+      return {
+        visualState: {
+          ...state.visualState,
+          hiddenClassIds: [...hiddenClassIds],
+          selectedClassId: descendantIds.includes(state.visualState.selectedClassId || '') ? classId : state.visualState.selectedClassId,
+        },
+      };
+    });
+    persistIfReady(get());
+  },
+  restoreAllHiddenClasses: () => {
+    set((state) => {
+      if (!state.visualState) {
+        return state;
+      }
+      return {
+        visualState: {
+          ...state.visualState,
+          hiddenClassIds: [],
+        },
+      };
+    });
+    persistIfReady(get());
+  },
   importLayout: (nextState) => {
     set((state) => {
       if (!state.ontology || nextState.fingerprint !== state.ontology.fingerprint) {
         return { error: 'The imported layout belongs to a different ontology fingerprint.' };
       }
-      return { visualState: applySearchFilter(state.ontology, nextState), error: null };
+      return { visualState: applySearchFilter(state.ontology, normalizeVisualState(nextState, state.ontology.fingerprint)), error: null };
     });
     persistIfReady(get());
   },

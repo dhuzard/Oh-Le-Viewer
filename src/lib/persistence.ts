@@ -1,4 +1,5 @@
 import type { PersistedViewerState } from '../types/ontology';
+import { normalizeVisualState } from './layout';
 
 const STORAGE_PREFIX = 'oh-le-viewer:';
 
@@ -9,7 +10,7 @@ export function loadPersistedState(fingerprint: string): PersistedViewerState | 
       return null;
     }
 
-    return JSON.parse(raw) as PersistedViewerState;
+    return normalizeVisualState(JSON.parse(raw) as PersistedViewerState, fingerprint);
   } catch {
     return null;
   }

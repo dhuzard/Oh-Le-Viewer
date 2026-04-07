@@ -99,6 +99,16 @@ export interface VisualNodeState {
   collapsedInHierarchy: boolean;
 }
 
+export interface EdgeAnchor {
+  xRatio: number;
+  yRatio: number;
+}
+
+export interface VisualEdgeState {
+  sourceAnchor: EdgeAnchor;
+  targetAnchor: EdgeAnchor;
+}
+
 export interface VisualGroup {
   id: string;
   label: string;
@@ -116,6 +126,7 @@ export interface PersistedViewerState {
   viewMode: ViewMode;
   selectedClassId: string | null;
   hiddenClassIds: string[];
+  filteredClassIds: string[];
   searchQuery: string;
   viewport: {
     x: number;
@@ -125,6 +136,7 @@ export interface PersistedViewerState {
   layoutSettings: LayoutSettings;
   groups: VisualGroup[];
   nodeStates: Record<string, VisualNodeState>;
+  edgeStates: Record<string, VisualEdgeState>;
 }
 
 export interface GraphNode {
@@ -139,6 +151,7 @@ export interface GraphNode {
   parentIds: string[];
   childIds: string[];
   dataPropertyCount: number;
+  dataProperties: string[];
   objectPropertyCount: number;
   restrictionCount: number;
 }
@@ -149,6 +162,8 @@ export interface GraphEdge {
   target: string;
   type: 'subclass' | 'object-property' | 'disjoint';
   label?: string;
+  sourceAnchor: EdgeAnchor;
+  targetAnchor: EdgeAnchor;
 }
 
 export interface ViewportState {

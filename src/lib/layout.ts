@@ -1,10 +1,13 @@
 import type {
+  EdgeAnchor,
   GraphModel,
   GraphEdge,
   GraphNode,
   LayoutSettings,
   OntologyDocument,
   PersistedViewerState,
+  VisualEdgeState,
+  VisualNodeState,
 } from '../types/ontology';
 
 const MAX_VISIBLE_GRAPH_EDGES = 320;
@@ -15,6 +18,97 @@ function isPresent<T>(value: T | null | undefined): value is T {
 
 function orderByLabel<T extends { label: string }>(items: T[]): T[] {
   return [...items].sort((left, right) => left.label.localeCompare(right.label));
+}
+
+export function createDefaultNodeState(): VisualNodeState {
+  return {
+    color: '#1c7c72',
+    groupId: null,
+    expanded: false,
+    detailMode: 'compact',
+    position: null,
+    pinned: false,
+    collapsedInHierarchy: false,
+  };
+}
+
+export function createDefaultEdgeState(): VisualEdgeState {
+  return {
+    sourceAnchor: { xRatio: 1, yRatio: 0.5 },
+    targetAnchor: { xRatio: 0, yRatio: 0.5 },
+  };
+}
+
+export function normalizeEdgeAnchor(anchor: EdgeAnchor | null | undefined, fallback: EdgeAnchor): EdgeAnchor {
+  const xRatio = anchor?.xRatio;
+  const yRatio = anchor?.yRatio;
+  return {
+    xRatio: typeof xRatio === 'number' && Number.isFinite(xRatio) ? Math.min(1, Math.max(0, xRatio)) : fallback.xRatio,
+    yRatio: typeof yRatio === 'number' && Number.isFinite(yRatio) ? Math.min(1, Math.max(0, yRatio)) : fallback.yRatio,
+  };
+}
+
+export function normalizeVisualState(state: PersistedViewerState | null | undefined, fingerprint: string): PersistedViewerState {
+  const defaults = createDefaultVisualState(fingerprint);
+  if (!state) {
+    return defaults;
+  }
+
+  const nodeStates = Object.fromEntries(
+    Object.entries(state.nodeStates || {}).map(([classId, nodeState]) => [classId, { ...createDefaultNodeState(), ...nodeState }]),
+  );
+  const edgeStates = Object.fromEntries(
+    Object.entries(state.edgeStates || {}).map(([edgeId, edgeState]) => [
+      edgeId,
+      {
+        sourceAnchor: normalizeEdgeAnchor(edgeState?.sourceAnchor, defaults.edgeStates[edgeId]?.sourceAnchor || createDefaultEdgeState().sourceAnchor),
+        targetAnchor: normalizeEdgeAnchor(edgeState?.targetAnchor, defaults.edgeStates[edgeId]?.targetAnchor || createDefaultEdgeState().targetAnchor),
+      },
+    ]),
+  );
+
+  return {
+    ...defaults,
+    ...state,
+    fingerprint,
+    hiddenClassIds: Array.isArray(state.hiddenClassIds) ? state.hiddenClassIds : [],
+    filteredClassIds: Array.isArray(state.filteredClassIds) ? state.filteredClassIds : [],
+    viewport: { ...defaults.viewport, ...state.viewport },
+    layoutSettings: { ...defaults.layoutSettings, ...state.layoutSettings },
+    groups: Array.isArray(state.groups) ? state.groups : [],
+    nodeStates,
+    edgeStates,
+  };
+}
+
+export function getHiddenClassIdSet(visualState: PersistedViewerState): Set<string> {
+  return new Set([...visualState.hiddenClassIds, ...visualState.filteredClassIds]);
+}
+
+export function collectSubclassDescendants(ontology: OntologyDocument, classId: string): string[] {
+  const childMap = new Map<string, string[]>();
+  for (const relation of ontology.relations) {
+    if (relation.type !== 'subclass') {
+      continue;
+    }
+
+    const children = childMap.get(relation.target) || [];
+    children.push(relation.source);
+    childMap.set(relation.target, children);
+  }
+
+  const visited = new Set<string>();
+  const stack = [...(childMap.get(classId) || [])];
+  while (stack.length > 0) {
+    const next = stack.pop();
+    if (!next || visited.has(next)) {
+      continue;
+    }
+    visited.add(next);
+    stack.push(...(childMap.get(next) || []));
+  }
+
+  return [...visited];
 }
 
 export function buildGraphModel(
@@ -69,7 +163,7 @@ export function buildGraphModel(
     levels.set(depth, list);
   }
 
-  const hiddenSet = new Set(visualState.hiddenClassIds);
+  const hiddenSet = getHiddenClassIdSet(visualState);
   const nodes = [...Object.values(ontology.classes)]
     .filter((ontologyClass) => !hiddenSet.has(ontologyClass.id))
     .map((ontologyClass) => {
@@ -92,6 +186,9 @@ export function buildGraphModel(
         parentIds: subclassParents.get(ontologyClass.id) || [],
         childIds: subclassChildren.get(ontologyClass.id) || [],
         dataPropertyCount: ontologyClass.dataPropertyIds.length,
+        dataProperties: ontologyClass.dataPropertyIds
+          .map((propertyId) => ontology.properties[propertyId]?.label || propertyId)
+          .sort((left, right) => left.localeCompare(right)),
         objectPropertyCount: ontologyClass.objectPropertyIds.length,
         restrictionCount: ontologyClass.restrictions.length + ontologyClass.anonymousExpressions.length,
       } satisfies GraphNode;
@@ -106,6 +203,8 @@ export function buildGraphModel(
       target: relation.target,
       type: relation.type,
       label: relation.label,
+      sourceAnchor: normalizeEdgeAnchor(visualState.edgeStates[relation.id]?.sourceAnchor, createDefaultEdgeState().sourceAnchor),
+      targetAnchor: normalizeEdgeAnchor(visualState.edgeStates[relation.id]?.targetAnchor, createDefaultEdgeState().targetAnchor),
     } satisfies GraphEdge));
 
   if (allEdges.length <= MAX_VISIBLE_GRAPH_EDGES) {
@@ -135,7 +234,7 @@ export function buildHierarchyRows(
 ): HierarchyRow[] {
   const childMap = new Map<string, string[]>();
   const roots = ontology.roots.length > 0 ? ontology.roots : Object.keys(ontology.classes);
-  const hiddenSet = new Set(visualState.hiddenClassIds);
+  const hiddenSet = getHiddenClassIdSet(visualState);
 
   for (const relation of ontology.relations) {
     if (relation.type !== 'subclass') {
@@ -179,7 +278,7 @@ export function buildGroupedColumns(
   visualState: PersistedViewerState,
 ): Array<{ groupId: string; label: string; color: string; classIds: string[] }> {
   const groups = new Map<string, { groupId: string; label: string; color: string; classIds: string[] }>();
-  const hiddenSet = new Set(visualState.hiddenClassIds);
+  const hiddenSet = getHiddenClassIdSet(visualState);
 
   for (const ontologyClass of Object.values(ontology.classes)) {
     if (hiddenSet.has(ontologyClass.id)) {
@@ -211,6 +310,7 @@ export function createDefaultVisualState(fingerprint: string): PersistedViewerSt
     viewMode: 'graph',
     selectedClassId: null,
     hiddenClassIds: [],
+    filteredClassIds: [],
     searchQuery: '',
     viewport: { x: 0, y: 0, zoom: 1 },
     layoutSettings: {
@@ -220,6 +320,7 @@ export function createDefaultVisualState(fingerprint: string): PersistedViewerSt
     },
     groups: [],
     nodeStates: {},
+    edgeStates: {},
   };
 }
 
@@ -227,17 +328,14 @@ export function ensureNodeState(
   visualState: PersistedViewerState,
   classId: string,
 ): PersistedViewerState['nodeStates'][string] {
-  return (
-    visualState.nodeStates[classId] || {
-      color: '#1c7c72',
-      groupId: null,
-      expanded: false,
-      detailMode: 'compact',
-      position: null,
-      pinned: false,
-      collapsedInHierarchy: false,
-    }
-  );
+  return visualState.nodeStates[classId] || createDefaultNodeState();
+}
+
+export function ensureEdgeState(
+  visualState: PersistedViewerState,
+  edgeId: string,
+): PersistedViewerState['edgeStates'][string] {
+  return visualState.edgeStates[edgeId] || createDefaultEdgeState();
 }
 
 export function countVisibleMatches(ontology: OntologyDocument, searchQuery: string): number {
@@ -269,10 +367,10 @@ export function applySearchFilter(
 ): PersistedViewerState {
   const query = visualState.searchQuery.trim().toLowerCase();
   if (!query) {
-    return { ...visualState, hiddenClassIds: [] };
+    return { ...visualState, filteredClassIds: [] };
   }
 
-  const hiddenClassIds = Object.values(ontology.classes)
+  const filteredClassIds = Object.values(ontology.classes)
     .filter((entry) => {
       return !(
         entry.label.toLowerCase().includes(query)
@@ -290,7 +388,7 @@ export function applySearchFilter(
     })
     .map((entry) => entry.id);
 
-  return { ...visualState, hiddenClassIds };
+  return { ...visualState, filteredClassIds };
 }
 
 export function clampViewportZoom(value: number): number {

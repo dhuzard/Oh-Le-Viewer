@@ -28,10 +28,15 @@ export default function App() {
     setSearchQuery,
     setViewMode,
     updateNodeState,
+    updateEdgeState,
     setViewport,
     setLayoutSettings,
     upsertGroup,
     assignGroupToSelected,
+    hideClass,
+    restoreClass,
+    hideBranch,
+    restoreAllHiddenClasses,
     importLayout,
     replaceVisualState,
   } = useViewerStore();
@@ -142,9 +147,19 @@ export default function App() {
               edges={graph.edges}
               hiddenEdgeCount={graph.hiddenEdgeCount}
               visualState={visualState}
+              activeViewMode={visualState.viewMode}
+              hiddenClasses={visualState.hiddenClassIds.map((classId) => ({ id: classId, label: ontology.classes[classId]?.label || classId }))}
               selectedClassId={visualState.selectedClassId}
               onSelectClass={selectClass}
               onMoveNode={(classId, position) => updateNodeState(classId, { position, pinned: true })}
+              onViewModeChange={setViewMode}
+              onLayoutChange={setLayoutSettings}
+              onUpdateNodeState={updateNodeState}
+              onUpdateEdgeState={updateEdgeState}
+              onHideClass={hideClass}
+              onHideBranch={hideBranch}
+              onRestoreClass={restoreClass}
+              onRestoreAllHidden={restoreAllHiddenClasses}
               onViewportChange={setViewport}
             />
           ) : null}

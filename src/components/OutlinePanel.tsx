@@ -1,3 +1,4 @@
+import { getHiddenClassIdSet } from '../lib/layout';
 import type { OntologyDocument, PersistedViewerState } from '../types/ontology';
 
 interface OutlinePanelProps {
@@ -7,8 +8,9 @@ interface OutlinePanelProps {
 }
 
 export function OutlinePanel({ ontology, visualState, onSelectClass }: OutlinePanelProps) {
+  const hiddenSet = getHiddenClassIdSet(visualState);
   const visibleClasses = Object.values(ontology.classes)
-    .filter((entry) => !visualState.hiddenClassIds.includes(entry.id))
+    .filter((entry) => !hiddenSet.has(entry.id))
     .sort((left, right) => left.label.localeCompare(right.label));
 
   return (
